@@ -24,5 +24,8 @@ def generate_360_summary(structured_data: Dict[str, str]) -> str:
 
     if "adoption" in structured_data:
         summary_sections.append("**Adoption and Customer Trends**\n" + structured_data["adoption"])
+        
+    if "contextual" in structured_data:
+        summary_sections.append("**Contextual Analysis**\n" + structured_data["contextual"])
 
     return "\n\n".join(summary_sections).strip()
