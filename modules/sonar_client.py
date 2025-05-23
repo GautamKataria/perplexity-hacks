@@ -1,12 +1,12 @@
 import asyncio
 import httpx
-from typing import List, Dict
+from typing import List, Dict, Any
 from config import PERPLEXITY_API_KEY
 
 API_URL = "https://api.perplexity.ai/chat/completions"
 
 
-async def fetch_single_prompt(client, prompt: Dict) -> Dict:
+async def fetch_single_prompt(client: httpx.AsyncClient, prompt: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "model": "sonar",
         "messages": [
@@ -28,17 +28,29 @@ async def fetch_single_prompt(client, prompt: Dict) -> Dict:
     try:
         response = await client.post(API_URL, json=payload)
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
-        return {"pillar": prompt["pillar"], "content": content}
+        json_data = response.json()
+        message = json_data["choices"][0]["message"]
+        content = message.get("content", "")
+        citations = message.get("citations", [])
+        return {
+            "pillar": prompt["pillar"],
+            "content": content,
+            "citations": citations
+        }
     except Exception as e:
-        return {"pillar": prompt["pillar"], "content": f"[ERROR] {e}"}
+        return {
+            "pillar": prompt["pillar"],
+            "content": f"[ERROR] {e}",
+            "citations": []
+        }
 
 
-async def fetch_sonar_responses(prompts: List[Dict]) -> List[Dict]:
+async def fetch_sonar_responses(prompts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     headers = {
         "Authorization": f"Bearer {PERPLEXITY_API_KEY}",
         "Content-Type": "application/json"
     }
+
     async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
         tasks = [fetch_single_prompt(client, p) for p in prompts]
         return await asyncio.gather(*tasks)

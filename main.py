@@ -3,48 +3,115 @@ from modules.sonar_client import fetch_sonar_responses
 from modules.response_parser import parse_sonar_responses
 from modules.summarizer import generate_360_summary
 from modules.agent_intent_handler import get_subject_and_focus_from_agent
-import asyncio
 
-def main(query: str):
-    # Step 1: Intent recognition with optional direct answer
-    intent = get_subject_and_focus_from_agent(query)
-    print("intent:", intent)
+# Chart imports
+from charts.connectors.sector_growth_client import get_sector_typical_prices
+from charts.connectors.stockprice_client import fetch_stock_price_data
+from charts.connectors.pytrends_client import fetch_google_trend_data
+from charts.connectors.newsapi_client import fetch_news_sentiment_data
+from charts.chart_utils import format_chart_block
+
+import asyncio
+import pandas as pd
+
+async def main(query: str):
+    output = {
+        "summary": {},
+        "charts": []
+    }
+
+    # Step 1: Intent recognition
+    try:
+        intent = get_subject_and_focus_from_agent(query)
+        print("intent:", intent)
+    except Exception as e:
+        print(f"[Intent Recognition Error] {e}")
+        return output
 
     if intent.get("type") == "direct_answer" and "answer" in intent:
-        print("\n🔹 Direct Answer:\n", intent["answer"])
-        return
+        output["summary"]["content"] = intent.get("answer", "")
+        output["summary"]["citations"] = intent.get("citations", [])
+        return output
 
-    subject = intent["subject"]
-    focuses = intent["focus"]
+    subject = intent.get("subject")
+    sector = intent.get("sector")
+    ticker = intent.get("ticker")
+    focuses = intent.get("focus", [])
 
-    # Step 2: Generate analysis prompts
-    prompts = generate_prompts(subject, focuses)
-    print("prompts:", prompts)
+    # Step 2: Chart generation (run concurrently)
+    chart_tasks = []
 
-    # Step 3: Fetch Sonar responses
-    responses = asyncio.run(fetch_sonar_responses(prompts))
-    print("responses:", responses)
+    try:
+        if sector:
+            chart_tasks.append(get_sector_typical_prices())
+        if ticker:
+            chart_tasks.append(fetch_stock_price_data(ticker))
+        if subject:
+            chart_tasks.append(fetch_google_trend_data(subject))
+            chart_tasks.append(fetch_news_sentiment_data(subject))
 
-    # Step 4: Parse structured data
-    structured_data = parse_sonar_responses(responses)
-    print("structured_data:", structured_data)
+        chart_results = await asyncio.gather(*chart_tasks, return_exceptions=True)
+    except Exception as e:
+        print(f"[Chart Gathering Error] {e}")
+        chart_results = []
 
-    # Step 5: Summarize key insights
-    summary = generate_360_summary(structured_data)
-    print("summary:", summary)
+    result_idx = 0
+
+    def safe_append_chart(df, chart_type, title, description, highlight=None):
+        try:
+            if isinstance(df, pd.DataFrame):
+                output["charts"].append(format_chart_block(
+                    chart_type=chart_type,
+                    title=title,
+                    description=description,
+                    df=df,
+                    legend=list(df.columns),
+                    highlight=highlight
+                ))
+        except Exception as e:
+            print(f"[Chart Formatting Error] {title}: {e}")
+
+    try:
+        if sector:
+            df = chart_results[result_idx]; result_idx += 1
+            safe_append_chart(df, "line", "Sector Growth (Typical Price)", f"Growth comparison across all sectors with {sector} highlighted.", highlight=sector)
+        if ticker:
+            df = chart_results[result_idx]; result_idx += 1
+            safe_append_chart(df, "line", f"{ticker} Stock Price", f"{ticker} daily OHLC price chart")
+        if subject:
+            py_df = chart_results[result_idx]; result_idx += 1
+            news_df = chart_results[result_idx]; result_idx += 1
+            safe_append_chart(py_df, "line", f"{subject} Search Trends", f"Search interest for '{subject}' over time")
+            safe_append_chart(news_df, "bar", f"{subject} News Sentiment", f"News sentiment breakdown for '{subject}'")
+    except Exception as e:
+        print(f"[Chart Processing Error] {e}")
+
+    # Step 3: Generate prompts and fetch sonar responses
+    try:
+        prompts = generate_prompts(subject, focuses)
+        responses = await fetch_sonar_responses(prompts)
+        structured_data = parse_sonar_responses(responses)
+        output["summary"] = structured_data
+    except Exception as e:
+        print(f"[Sonar Processing Error] {e}")
+
+    return output
+
 
 if __name__ == "__main__":
-    import sys
+    import sys, json
     user_input = sys.argv[1] if len(sys.argv) > 1 else input("Enter your query: ")
-    main(user_input)
-
-
+    result = asyncio.run(main(user_input))
+    print("\n final answer \n \n",result)
+    print(json.dumps(result, indent=2))
 
 ### fastapi version commented out for now
 
 # from fastapi import FastAPI, Request
 # from pydantic import BaseModel
-# from typing import List, Dict, Any
+# from fastapi.middleware.cors import CORSMiddleware
+# import uvicorn
+# import asyncio
 
 # from modules.prompt_generator import generate_prompts
 # from modules.sonar_client import fetch_sonar_responses
@@ -52,45 +119,105 @@ if __name__ == "__main__":
 # from modules.summarizer import generate_360_summary
 # from modules.agent_intent_handler import get_subject_and_focus_from_agent
 
-# import asyncio
+# from charts.connectors.sector_growth_client import get_sector_typical_prices
+# from charts.connectors.stockprice_client import fetch_stock_price_data
+# from charts.connectors.pytrends_client import fetch_google_trend_data
+# from charts.connectors.newsapi_client import fetch_news_sentiment_data
+# from charts.chart_utils import format_chart_block
+
+# import pandas as pd
+
 # app = FastAPI()
 
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
-# class QueryRequest(BaseModel):
-#     input: str
+# class QueryInput(BaseModel):
+#     query: str
 
+# @app.post("/analyze")
+# async def analyze(input: QueryInput):
+#     query = input.query
+#     output = {"summary": {}, "charts": []}
 
-# class ChartResponse(BaseModel):
-#     subject: str
-#     focus: List[str]
-#     prompts: List[Dict[str, Any]]
-#     structured_data: Dict[str, str]
-#     summary: str
+#     try:
+#         intent = get_subject_and_focus_from_agent(query)
+#         print("intent:", intent)
+#     except Exception as e:
+#         print(f"[Intent Recognition Error] {e}")
+#         return output
 
+#     if intent.get("type") == "direct_answer" and "answer" in intent:
+#         output["summary"] = {
+#             "content": intent.get("answer", ""),
+#             "citations": intent.get("citations", [])
+#         }
+#         return output
 
-# @app.post("/analyze", response_model=ChartResponse)
-# async def analyze_query(request: QueryRequest):
-#     query = request.input
+#     subject = intent.get("subject")
+#     sector = intent.get("sector")
+#     ticker = intent.get("ticker")
+#     focuses = intent.get("focus", [])
 
-#     # Step 1: AI Agent detects subject + focus areas
-#     subject, focus = get_subject_and_focus_from_agent(query)
+#     chart_tasks = []
+#     try:
+#         if sector:
+#             chart_tasks.append(get_sector_typical_prices())
+#         if ticker:
+#             chart_tasks.append(fetch_stock_price_data(ticker))
+#         if subject:
+#             chart_tasks.append(fetch_google_trend_data(subject))
+#             chart_tasks.append(fetch_news_sentiment_data(subject))
+#         chart_results = await asyncio.gather(*chart_tasks, return_exceptions=True)
+#     except Exception as e:
+#         print(f"[Chart Gathering Error] {e}")
+#         chart_results = []
 
-#     # Step 2: Prompt generation
-#     prompts = generate_prompts(subject, focus)
+#     result_idx = 0
 
-#     # Step 3: Fetch Sonar responses
-#     responses = await fetch_sonar_responses(prompts)
+#     def safe_append_chart(df, chart_type, title, description, highlight=None):
+#         try:
+#             if isinstance(df, pd.DataFrame):
+#                 output["charts"].append(format_chart_block(
+#                     chart_type=chart_type,
+#                     title=title,
+#                     description=description,
+#                     df=df,
+#                     legend=list(df.columns),
+#                     highlight=highlight
+#                 ))
+#         except Exception as e:
+#             print(f"[Chart Formatting Error] {title}: {e}")
 
-#     # Step 4: Parse structured data
-#     structured_data = parse_sonar_responses(responses)
+#     try:
+#         if sector:
+#             df = chart_results[result_idx]; result_idx += 1
+#             safe_append_chart(df, "line", "Sector Growth (Typical Price)", f"Growth comparison across all sectors with {sector} highlighted.", highlight=sector)
+#         if ticker:
+#             df = chart_results[result_idx]; result_idx += 1
+#             safe_append_chart(df, "line", f"{ticker} Stock Price", f"{ticker} daily OHLC price chart")
+#         if subject:
+#             py_df = chart_results[result_idx]; result_idx += 1
+#             news_df = chart_results[result_idx]; result_idx += 1
+#             safe_append_chart(py_df, "line", f"{subject} Search Trends", f"Search interest for '{subject}' over time")
+#             safe_append_chart(news_df, "bar", f"{subject} News Sentiment", f"News sentiment breakdown for '{subject}'")
+#     except Exception as e:
+#         print(f"[Chart Processing Error] {e}")
 
-#     # Step 5: Generate summary
-#     summary = generate_360_summary(structured_data)
+#     try:
+#         prompts = generate_prompts(subject, focuses)
+#         responses = await fetch_sonar_responses(prompts)
+#         structured_data = parse_sonar_responses(responses)
+#         output["summary"] = structured_data
+#     except Exception as e:
+#         print(f"[Sonar Processing Error] {e}")
 
-#     return {
-#         "subject": subject,
-#         "focus": focus,
-#         "prompts": prompts,
-#         "structured_data": structured_data,
-#         "summary": summary,
-#     }
+#     return output
+
+# if __name__ == "__main__":
+#     uvicorn.run("main_api:app", host="0.0.0.0", port=8000, reload=True)
