@@ -23,7 +23,6 @@ async def main(query: str):
     # Step 1: Intent recognition
     try:
         intent = get_subject_and_focus_from_agent(query)
-        print("intent:", intent)
     except Exception as e:
         print(f"[Intent Recognition Error] {e}")
         return output
